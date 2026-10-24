@@ -1,4 +1,4 @@
-"""The Euclid inputs for a ground image: MER sources, VIS cutout and models.
+"""The selected Euclid inputs for a ground image: MER sources, VIS cutout and models.
 
 :func:`prepare_euclid` reuses the cached MER catalog, VIS cutout and GRID
 PSF around the ground image (downloading what is missing), and
@@ -32,8 +32,9 @@ class EuclidInputs:
 
 
 def prepare_euclid(image: SmallImage, data_dir: str | Path,
-                   *, padding_arcsec: float = 5.0) -> EuclidInputs:
-    """Reuse local MER/VIS/GRID-PSF inputs and fetch only missing files."""
+                   *, padding_arcsec: float = 5.0,
+                   force_download: bool = False) -> EuclidInputs:
+    """Prepare MER/VIS/GRID-PSF inputs, optionally bypassing their cache."""
     data_dir = Path(data_dir)
     ny, nx = image.science_ujy.shape
     center = image.wcs.pixel_to_world((nx - 1) / 2, (ny - 1) / 2)
@@ -52,8 +53,8 @@ def prepare_euclid(image: SmallImage, data_dir: str | Path,
     # rotated. Use the bounding sky square, including a small source margin.
     size = float(10.0 * np.ceil(raw_side / 10))
     # Same cache name as run_forced_photometry, so either can reuse it.
-    mer_path = data_dir / f"mer_catalog_{ra:.4f}_{dec:.4f}_{int(round(size))}.fits"
-    if mer_path.is_file():
+    mer_path = data_dir / "catalogs" / f"mer_catalog_{ra:.4f}_{dec:.4f}_{int(round(size))}.fits"
+    if mer_path.is_file() and not force_download:
         mer = Table.read(mer_path)
         print("MER: local cache", mer_path.name)
     else:
@@ -66,11 +67,12 @@ def prepare_euclid(image: SmallImage, data_dir: str | Path,
         print("MER: saved", mer_path.name)
     # Both functions read their local cache first and fetch missing data.
     vis = fetch_cutout("VIS", ra, dec, size, data_dir=data_dir / "cutouts",
-                       with_flag=True)
+                       with_flag=True, force_download=force_download)
     print("VIS science/RMS/flag: ready")
     psf = extract_grid_psf(
         "VIS", ra, dec, tile_id=vis.header.get("MERTILE"),
-        radius_arcsec=max(60.0, 0.75 * size), data_dir=data_dir / "psf")
+        radius_arcsec=max(60.0, 0.75 * size), data_dir=data_dir / "psf",
+        force_download=force_download)
     print("VIS GRID PSF: ready")
     if not len(psf["stamps"]):
         raise ValueError("No VIS GRID-PSF stamps cover this field")
@@ -78,14 +80,16 @@ def prepare_euclid(image: SmallImage, data_dir: str | Path,
 
 
 def fit_vis(inputs: EuclidInputs, data_dir: str | Path, *, n_workers: int = 8,
-            existing=None):
+            existing=None, force_fit: bool = False, force_download: bool = False):
     """Fit the same VIS prior as notebooks 01-03; optionally reuse a live result.
 
     An in-memory result from another notebook may be passed as ``existing``.
     Cached image/PSF/catalog files are reused automatically; the standard
     pipeline does not currently persist its fitted Tractor source list.
+    ``force_fit=True`` ignores ``existing``; ``force_download=True`` refreshes
+    image and PSF inputs (the supplied ``inputs.mer`` catalog is retained).
     """
-    if existing is not None:
+    if existing is not None and not (force_fit or force_download):
         if len(existing.sources) != len(inputs.mer):
             raise ValueError("existing VIS result has a different MER source count")
         if not np.array_equal(np.asarray(existing.mer_cat["object_id"]),
@@ -99,5 +103,5 @@ def fit_vis(inputs: EuclidInputs, data_dir: str | Path, *, n_workers: int = 8,
         target_bands={"euclid": (), "wise": ()},
         psf_product="grid", persource_psf=True, mask_bright_stars=True,
         calibrate_errors=False, data_dir=Path(data_dir), n_workers=n_workers,
-        mer_catalog=inputs.mer,
+        mer_catalog=inputs.mer, force_download=force_download,
     )
