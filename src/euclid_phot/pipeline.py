@@ -345,6 +345,10 @@ class ForcedPhotometryResult:
     flux_errs_ujy: dict = field(default_factory=dict)     # band -> ndarray (1-sigma)
     flux_quality: np.ndarray | None = None
     chosen_models: list | None = None
+    # band -> fit_nisp_forced output: fluxes as fitted, before the NaN of a
+    # failed prior fit, aligned with sources + neighbour_sources; image_set
+    # renders the NISP models from them.
+    nisp_results: dict | None = None
     wise_results: dict | None = None
     irac_results: dict | None = None
     ground_results: dict | None = None
@@ -362,9 +366,6 @@ class ForcedPhotometryResult:
     # of every band but are not reported.
     neighbour_sources: list = field(default_factory=list)
     neighbour_fluxes_ujy: dict = field(default_factory=dict)   # band -> ndarray
-    # Raw target-band fits include flagged sources and unreported neighbours,
-    # so diagnostic models reproduce the full fitted scene.
-    nisp_results: dict | None = None
 
     def to_table(self, **kwargs):
         """Assemble the per-object science catalog (astropy Table).
@@ -381,13 +382,11 @@ class ForcedPhotometryResult:
     def image_set(self, band: str) -> dict:
         """Data, model, residual and invvar images and WCS for one band.
 
-        Available for the Euclid prior and fitted target bands (rendered
-        from the fitted sources), and every fitted WISE, IRAC and ground band.
-        Images are
+        Available for the prior band and every fitted NISP band (the model
+        is rendered from the fitted sources), and for every fitted WISE,
+        IRAC and ground band. Images are
         in microJansky per pixel and ``invvar`` in 1/(microJansky/pixel)^2.
-        Ground images are on their own pixel grid. No fit or download runs.
-        Older results without raw target-band fits use their reported fluxes;
-        unavailable fluxes contribute zero and emit a warning.
+        Ground images are on their own pixel grid.
         """
         from .viz import UJY_PER_PIXEL, ujy_per_unit
         band = str(band).upper() if str(band).upper().startswith(
@@ -403,35 +402,17 @@ class ForcedPhotometryResult:
                         "invvar": r["invvar"] / f**2,
                         "wcs": r["wcs"], "unit": UJY_PER_PIXEL}
         sources = list(self.sources) + list(self.neighbour_sources)
-        if band != self.prior.get("band"):
+        if self.nisp_results and band in self.nisp_results:
+            # The prior-band models with the fluxes fitted in this band.
             from .sources import clone_sources
             from .units import UJY_PER_NMGY
-
-            target_results = getattr(self, "nisp_results", None) or {}
-            if band in target_results:
-                fitted = np.asarray(target_results[band]["flux_ujy"], float)
-            elif band in self.cutouts and band in self.fluxes_ujy:
-                # Backwards compatibility for already-completed fits. Catalog
-                # quality cuts may have hidden some amplitudes in old results.
-                fitted = np.concatenate((
-                    np.asarray(self.fluxes_ujy[band], float),
-                    np.asarray(self.neighbour_fluxes_ujy.get(band, []), float)))
-            else:
-                raise ValueError(
-                    f"no images for {band!r}; available: the prior band "
-                    f"{self.prior.get('band')!r} and the Euclid/WISE/IRAC/ground bands fitted")
-            if fitted.shape != (len(sources),):
-                raise ValueError(f"{band} fitted fluxes must align with the full source list")
-            missing = ~np.isfinite(fitted)
-            if missing.any():
-                import warnings
-                warnings.warn(
-                    f"{band} diagnostic model omits {int(missing.sum())} source(s) "
-                    "with unavailable fitted fluxes. Older results may have "
-                    "masked them during catalog quality cuts.", stacklevel=2)
-            sources = clone_sources(
-                sources, band,
-                seed_nmgy=np.where(missing, 0.0, fitted) / UJY_PER_NMGY)
+            fitted = np.asarray(self.nisp_results[band]["flux_ujy"], float)
+            sources = clone_sources(sources, band,
+                                    seed_nmgy=np.nan_to_num(fitted) / UJY_PER_NMGY)
+        elif band != self.prior.get("band"):
+            raise ValueError(
+                f"no images for {band!r}; available: the prior band "
+                f"{self.prior.get('band')!r} and the NISP/WISE/IRAC/ground bands fitted")
         from tractor import Tractor
         cutout = self.cutouts[band]
         persource = self.psf_mode == 'nearest-source-position'
@@ -465,7 +446,6 @@ class _Run:
     half_size_deg: object
     verbose: object
     force_download: object
-    cache_only: object
     n_workers: object
     persource_psf: object
     with_flag: object
@@ -522,8 +502,6 @@ def _load_source_list(run, result, user_coords, mer_catalog):
                 print(f"[1/7] MER catalog from cache ({mer_cache.name})")
             result.mer_cat = Table.read(mer_cache)
         else:
-            if run.cache_only:
-                raise FileNotFoundError(f"MER catalog cache is missing: {mer_cache}")
             if verbose:
                 print(f"[1/7] query MER catalog at ({target_ra:.4f}, {target_dec:.4f})")
             result.mer_cat = query_mer_catalog(target_ra, target_dec, half_size_deg)
@@ -581,7 +559,6 @@ def _load_cutouts(run, result, provided, parsed_coords):
             band, target_ra, target_dec, cutout_size_arcsec,
             products=products, data_dir=cutout_dir,
             force_download=force_download,
-            cache_only=run.cache_only,
             # mask_bright_stars needs the FLG plane (STARSIGNAL bit) on the
             # prior band; the NISP FLG planes feed the coadd-fatal bad-bit
             # veto inside build_tractor_image.
@@ -645,8 +622,7 @@ def _load_psfs(run, result, products, parsed_coords):
     def _extract_psf(band):
         kw = dict(products=products, radius_arcsec=psf_radius,
                   tile_id=cutouts[band].header.get("MERTILE"),
-                  data_dir=psf_dir, force_download=force_download,
-                  cache_only=run.cache_only)
+                  data_dir=psf_dir, force_download=force_download)
         try:
             pd = _extractors[chosen_product](band, target_ra, target_dec, **kw)
         except Exception as exc:           # product missing / fetch failed
@@ -938,7 +914,6 @@ def _fit_nisp(run, result):
             pixel_mask=result.prior_pixel_mask,
             n_workers=n_workers,
         )
-        # Keep unmasked amplitudes for exact target-band diagnostic rendering.
         result.nisp_results = nisp
         # A diverged prior fit means an unreliable position/shape; NaN the
         # propagated flux.
@@ -977,7 +952,7 @@ def _fit_wise(run, result):
             cutout_size_arcsec=cutout_size_arcsec,
             psf_stamps=wise_psfs, bands=wise_targets,
             prior_cutout=result.cutouts[prior_band],
-            catalog_cache_dir=None if force_download else wise_dir / "catalogs")
+            catalog_cache_dir=wise_dir / "catalogs")
         for band in wise_targets:
             if band in result.wise_results:
                 wflux = np.asarray(result.wise_results[band]["flux_ujy"], dtype=float)
@@ -1090,10 +1065,8 @@ def run_forced_photometry(
     user_coords=None,
     data_dir: str | Path | None = None,
     force_download: bool = False,
-    cache_only: bool = False,
     verbose: bool = True,
     n_workers: int = 1,
-    progress_sources: bool = False,
     persource_psf: bool = True,
     with_flag: bool = False,
     mask_bright_stars=False,
@@ -1252,8 +1225,6 @@ def run_forced_photometry(
     ForcedPhotometryResult
     """
     prior = _normalize_prior(prior, has_user_coords=user_coords is not None)
-    if cache_only and force_download:
-        raise ValueError("cache_only and force_download cannot both be true")
     target_bands = _normalize_target_bands(target_bands, prior["band"])
     if psf_product not in ("auto", "catalog", "grid"):
         raise ValueError(
@@ -1281,7 +1252,6 @@ def run_forced_photometry(
         euclid_bands=euclid_bands, data_dir=data_dir, cutout_dir=cutout_dir,
         psf_dir=psf_dir, wise_dir=wise_dir, half_size_deg=half_size_deg,
         verbose=verbose, force_download=force_download, n_workers=n_workers,
-        cache_only=cache_only,
         persource_psf=persource_psf, with_flag=with_flag,
         mask_bright_stars=mask_bright_stars, psf_product=psf_product)
 

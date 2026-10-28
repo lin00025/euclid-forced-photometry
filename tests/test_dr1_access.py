@@ -138,7 +138,7 @@ def test_cached_cutouts_and_psfs_do_not_discover_q1_or_dr1(tmp_path, monkeypatch
         else:
             cutouts._write_cutout_fits(path, np.ones((5, 5)), wcs, header)
     cutout = ep.fetch_cutout(
-        "VIS", ra, dec, 0.5, data_dir=tmp_path, with_flag=True, cache_only=True)
+        "VIS", ra, dec, 0.5, data_dir=tmp_path, with_flag=True)
     assert cutout.shape == (5, 5)
     assert cutout.header["MERTILE"] == "123"
 
@@ -147,10 +147,5 @@ def test_cached_cutouts_and_psfs_do_not_discover_q1_or_dr1(tmp_path, monkeypatch
     cache = psf._requested_cache(cache, "123", None)
     np.savez(cache, stamps=np.ones((1, 3, 3)), fwhm=[0.2], tile_id="123")
     result = ep.extract_grid_psf(
-        "VIS", ra, dec, tile_id="123", data_dir=tmp_path, cache_only=True)
+        "VIS", ra, dec, tile_id="123", data_dir=tmp_path)
     assert result["stamps"].shape == (1, 3, 3)
-    with pytest.raises(ValueError, match="cache_only and force_download"):
-        ep.extract_grid_psf(
-            "VIS", ra, dec, cache_only=True, force_download=True)
-
-

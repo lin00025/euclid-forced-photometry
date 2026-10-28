@@ -11,7 +11,7 @@
         "tap_url": "https://irsa.ipac.caltech.edu/TAP",
         "sia_url": "https://irsa.ipac.caltech.edu/SIA",
         "ssa_url": "https://irsa.ipac.caltech.edu/SSA",
-        "timeout_seconds": 120
+        "timeout_seconds": 600
       }
     },
     "DR1": {
@@ -24,7 +24,7 @@
         "tap_url": "https://irsadev.ipac.caltech.edu/TAP",
         "sia_url": "https://irsadev.ipac.caltech.edu/SIA",
         "ssa_url": "https://irsadev.ipac.caltech.edu/SSA",
-        "timeout_seconds": 120
+        "timeout_seconds": 600
       }
     }
   },
@@ -32,6 +32,6 @@
     "tap_url": "https://irsa.ipac.caltech.edu/TAP",
     "sia_url": "https://irsa.ipac.caltech.edu/SIA",
     "ssa_url": "https://irsa.ipac.caltech.edu/SSA",
-    "timeout_seconds": 120
+    "timeout_seconds": 600
   }
 }

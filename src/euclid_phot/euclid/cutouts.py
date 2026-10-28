@@ -281,8 +281,7 @@ def fetch_cutout(band: str, ra: float, dec: float, size_arcsec: float,
                  mosaic_cache_dir: str | Path | None = None,
                  force_download: bool = False,
                  with_rms: bool = True,
-                 with_flag: bool = False,
-                 cache_only: bool = False) -> Cutout:
+                 with_flag: bool = False) -> Cutout:
     """Fetch a single-band cutout, reading the local FITS cache when present
     and otherwise downloading native pixels from S3 (and caching the result).
 
@@ -324,11 +323,6 @@ def fetch_cutout(band: str, ra: float, dec: float, size_arcsec: float,
     have_sci = sci_cache.exists()
     have_rms = rms_cache.exists() if with_rms else True
     have_flag = flag_cache.exists() if with_flag else True
-
-    if cache_only and force_download:
-        raise ValueError("cache_only and force_download cannot both be true")
-    if cache_only and not (have_sci and have_rms and have_flag):
-        raise FileNotFoundError("cutout cache is incomplete")
 
     if have_sci and have_rms and have_flag and not force_download:
         data, wcs, header = _read_cutout_fits(sci_cache)

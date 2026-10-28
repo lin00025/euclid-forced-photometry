@@ -150,7 +150,7 @@ def test_default_psf_cache_is_separate_after_repeated_switches(reader, tmp_path,
 
 
 # Official Caltech-IPAC Markdown at commit d1745a43c88d213805098db1a873862aec94be4c.
-MARKDOWN_SHA256 = {'06_photometry_at_coordinates.ipynb': 'a93f234f3fdb5d03f36d8a4bf5645b48499a8a07396593d96aaa429525972fa4', '02_wise_forced_photometry.ipynb': 'b789dc576d9a9c8cf74d89f6bc40dd5318a28fcf42130638feb3a0d3d475bd29', '03_irac_forced_photometry.ipynb': '5ac423011527bcb2be80eda82bd4d664bfc91fa0a7e278edb984c70688587f6a', '01_nisp_forced_photometry.ipynb': 'b4b486a80e34308eec3f58060e2c500d8fdc13505051cb6e3906bd6de813812b', '05_one_call.ipynb': '346e62c7cf2d633f901f8ac73d5b1f403bd51537c4c6de7d305c9246c047df2e', '00_how_tractor_works.ipynb': '0ab946df1a20d7c3ff52338ab342cc915fae94d4a2937dc95fb6d134d6a3081b', '04_ground_based_forced_photometry.ipynb': '615f9370c9c3dde2096710898a6a9f7ae01d675f83d5a441ab375158bd01c477'}
+MARKDOWN_SHA256 = {'06_photometry_at_coordinates.ipynb': 'a93f234f3fdb5d03f36d8a4bf5645b48499a8a07396593d96aaa429525972fa4', '02_wise_forced_photometry.ipynb': 'b789dc576d9a9c8cf74d89f6bc40dd5318a28fcf42130638feb3a0d3d475bd29', '03_irac_forced_photometry.ipynb': '5ac423011527bcb2be80eda82bd4d664bfc91fa0a7e278edb984c70688587f6a', '01_nisp_forced_photometry.ipynb': 'b4b486a80e34308eec3f58060e2c500d8fdc13505051cb6e3906bd6de813812b', '05_one_call.ipynb': '346e62c7cf2d633f901f8ac73d5b1f403bd51537c4c6de7d305c9246c047df2e', '00_how_tractor_works.ipynb': '0ab946df1a20d7c3ff52338ab342cc915fae94d4a2937dc95fb6d134d6a3081b', '04_ground_based_forced_photometry.ipynb': '615f9370c9c3dde2096710898a6a9f7ae01d675f83d5a441ab375158bd01c477', 'supporting_notebooks/injection_recovery.ipynb': '411e385c1dee2838abda37dfee2f69108f3e2765b4777e042cdf63799816411b', 'supporting_notebooks/model_selection.ipynb': '5a1b9327e5381c7646d80f57293b7b4013e78958b628ac3f29dfe60eef1ec783'}
 
 
 @pytest.mark.parametrize("name", sorted(MARKDOWN_SHA256))
@@ -159,13 +159,18 @@ def test_notebook_selector_markdown_and_shared_calls(name):
     nb = json.loads((root/"notebooks"/name).read_text())
     first_cell = next(c for c in nb["cells"] if c["cell_type"] == "code")
     first = "".join(first_cell["source"])
-    selector = "\n".join(first.splitlines()[:3])
+    tree = ast.parse(first)
+    selector_nodes = [n for n in tree.body if
+                      (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "DATA_ACCESS" for t in n.targets))
+                      or (isinstance(n, ast.Import) and any(a.name == "euclid_phot" for a in n.names))
+                      or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call) and ast.unparse(n.value.func) == "ep.set_data_access")]
+    selector = ast.unparse(ast.Module(body=selector_nodes, type_ignores=[]))
     assert 'DATA_ACCESS = "DR1"' in first
     assert "ep.set_data_access(DATA_ACCESS)" in first
     markdown = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "markdown"]
     assert hashlib.sha256(json.dumps(markdown,ensure_ascii=False).encode()).hexdigest() == MARKDOWN_SHA256[name]
     for release in ("Q1", "DR1"):
-        exec(compile(selector.replace('DATA_ACCESS = "DR1"', f'DATA_ACCESS = "{release}"'), name, "exec"), {"__name__":"__main__"})
+        exec(compile(selector.replace("DATA_ACCESS = 'DR1'", f"DATA_ACCESS = '{release}'"), name, "exec"), {"__name__":"__main__"})
         assert ep.get_data_access() == release
     for cell in nb["cells"]:
         if cell["cell_type"] != "code":continue
@@ -176,7 +181,7 @@ def test_notebook_selector_markdown_and_shared_calls(name):
                 assert not label.endswith("_DR1")
                 for kw in n.keywords:
                     if kw.arg in {"force", "force_download", "force_fit"}:
-                        assert isinstance(kw.value, ast.Constant) and kw.value.value is True
+                        assert not (isinstance(kw.value, ast.Constant) and kw.value.value is True)
             if isinstance(n, ast.Import):
                 assert all(alias.name != "euclid_phot.dr1" for alias in n.names)
 
@@ -185,3 +190,47 @@ def test_configuration_ships_inside_package():
     assert access.CONFIG_PATH.parent == Path(access.__file__).resolve().parent
     assert access.CONFIG_PATH.is_file()
     assert set(access.load_access_config()["releases"]) == {"Q1", "DR1"}
+
+
+@pytest.mark.parametrize("release", ["Q1", "DR1"])
+def test_notebook01_mer_query_is_cached_before_image_downloads(release, tmp_path, monkeypatch):
+    ep.set_data_access(release)
+    monkeypatch.setenv("EUCLID_PHOT_DATA_DIR", str(tmp_path))
+    calls = []
+    def query(*args, **kwargs):
+        calls.append(args)
+        return Table({"object_id": [123], "ra": [269.48], "dec": [67.3]})
+    monkeypatch.setattr(ep, "query_mer_catalog", query)
+    path = Path(__file__).resolve().parents[1] / "notebooks/01_nisp_forced_photometry.ipynb"
+    notebook = json.loads(path.read_text())
+    code = next("".join(c["source"]) for c in notebook["cells"]
+                if c["cell_type"] == "code" and "mer_path =" in "".join(c["source"]))
+    body = []
+    for node in ast.parse(code).body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "cutouts" for t in node.targets):
+            break
+        body.append(node)
+    query_cell = compile(ast.Module(body=body, type_ignores=[]), str(path), "exec")
+    scope = dict(DATA_DIR=ep.get_data_dir(), TARGET_RA=269.48, TARGET_DEC=67.3,
+                 CUTOUT_SIZE_ARCSEC=200., Table=Table, ep=ep)
+    exec(query_cell, scope)
+    cached = scope["mer_path"]
+    assert cached.is_file() and len(calls) == 1
+    # Simulate a new kernel: no MER table survives, but the disk cache does.
+    del scope["mer_cat"]
+    exec(query_cell, scope)
+    assert len(calls) == 1
+    np.testing.assert_array_equal(scope["mer_cat"]["object_id"], [123])
+
+
+@pytest.mark.parametrize("release", ["Q1", "DR1", "public"])
+def test_irsa_clients_apply_the_longer_request_timeout(release, monkeypatch):
+    from requests.sessions import Session
+    requests = []
+    def request(self, method, url, **kwargs):
+        requests.append(kwargs)
+        return object()
+    monkeypatch.setattr(Session, "request", request)
+    client = access.get_public_irsa_client() if release == "public" else access.get_irsa_client(release)
+    client._session.request("GET", "https://example.invalid")
+    assert requests[0]["timeout"] == 600

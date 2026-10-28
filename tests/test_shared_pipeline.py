@@ -137,7 +137,6 @@ def test_ground_prior_uses_shared_hooks_and_reuses_its_catalog(tmp_path, monkeyp
     image = SmallImage(np.zeros((25, 25)), np.ones((25, 25)), make_wcs(),
                        np.ones((3, 3)) / 9, "r")
     calls = []
-    forced_download = False
     mer = Table(dict(object_id=[123], ra=[269.48], dec=[67.3]))
 
     def query(*args, **kwargs):
@@ -147,19 +146,16 @@ def test_ground_prior_uses_shared_hooks_and_reuses_its_catalog(tmp_path, monkeyp
     def fetch(*args, **kwargs):
         calls.append("cutout")
         assert kwargs["with_flag"]
-        assert kwargs["force_download"] is forced_download
         return SimpleNamespace(header={"MERTILE": "123"})
 
     def extract(*args, **kwargs):
         calls.append("psf")
         assert kwargs["tile_id"] == "123"
-        assert kwargs["force_download"] is forced_download
         return {"stamps": np.ones((1, 3, 3)) / 9}
 
     def run(*args, **kwargs):
         calls.append("pipeline")
         assert kwargs["mer_catalog"] is inputs.mer
-        assert kwargs["force_download"] is forced_download
         return "DR1 fitted result"
 
     monkeypatch.setattr(prior, "query_mer_catalog", query)
@@ -175,14 +171,3 @@ def test_ground_prior_uses_shared_hooks_and_reuses_its_catalog(tmp_path, monkeyp
     np.testing.assert_array_equal(cached.mer["object_id"], mer["object_id"])
     assert ep.ground_based.fit_vis(inputs, tmp_path) == "DR1 fitted result"
     assert calls[-1] == "pipeline"
-    calls.clear()
-    forced_download = True
-    ep.ground_based.prepare_euclid(image, tmp_path, force_download=True)
-    assert calls == ["catalog", "cutout", "psf"]
-    assert ep.ground_based.fit_vis(
-        inputs, tmp_path, existing=object(), force_fit=True,
-        force_download=True) == "DR1 fitted result"
-    assert calls[-1] == "pipeline"
-    forced_download = False
-    assert ep.ground_based.fit_vis(
-        inputs, tmp_path, existing=object(), force_fit=True) == "DR1 fitted result"

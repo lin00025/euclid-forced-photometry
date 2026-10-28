@@ -8,12 +8,9 @@ atomically over verified HTTPS.
 from __future__ import annotations
 
 import os
-import hashlib
-import http.client
-import re
+import shutil
 import ssl
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -82,92 +79,23 @@ def https_ssl_context() -> ssl.SSLContext:
 
 
 def download_file(url: str, path: str | Path, *, force: bool = False,
-                  timeout: float = 300.0, attempts: int = 4) -> Path:
-    """Download atomically, retrying stalled reads and resuming partial files.
-
-    A failed download stays in ``<path>.tmp`` for the next attempt or run.
-    The sidecar records the URL hash so bytes from a different archive
-    product can never be appended to it. The final path appears only after
-    the response completes and any reported content length is verified.
-    """
+                  timeout: float = 120.0) -> Path:
+    """Download a file atomically over verified HTTPS."""
     path = Path(path)
     if path.exists() and not force:
         return path
-    if attempts < 1:
-        raise ValueError("attempts must be at least one")
     ensure_https_ca_bundle()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
-    marker = path.with_name(path.name + ".tmp.urlsha256")
-    url_hash = hashlib.sha256(url.encode()).hexdigest()
-    if temporary.exists() and (not marker.exists()
-                               or marker.read_text() != url_hash):
-        temporary.unlink()
-    marker.write_text(url_hash)
-
-    for attempt in range(attempts):
-        offset = temporary.stat().st_size if temporary.exists() else 0
-        headers = {"Range": f"bytes={offset}-"} if offset else {}
-        request = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                status = getattr(response, "status", None) or response.getcode()
-                content_range = response.headers.get("Content-Range", "")
-                if offset and status == 206:
-                    match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)",
-                                         content_range)
-                    if match is None or int(match.group(1)) != offset:
-                        temporary.unlink(missing_ok=True)
-                        raise OSError("archive returned an invalid resume range")
-                    total_size = None if match.group(3) == "*" else int(match.group(3))
-                elif offset and status == 200:
-                    # This server ignored Range; safely restart from byte zero.
-                    offset = 0
-                    total_size = None
-                elif offset:
-                    temporary.unlink(missing_ok=True)
-                    raise OSError(f"archive returned unexpected HTTP {status} for resume")
-                else:
-                    if status != 200:
-                        raise OSError(f"archive returned unexpected HTTP {status}")
-                    total_size = None
-
-                expected = response.headers.get("Content-Length")
-                expected = int(expected) if expected is not None else None
-                received = 0
-                with temporary.open("ab" if offset else "wb") as output:
-                    while chunk := response.read(1 << 20):
-                        output.write(chunk)
-                        received += len(chunk)
-                if expected is not None and received != expected:
-                    raise OSError(f"incomplete download: {received}/{expected} bytes")
-                if total_size is not None and temporary.stat().st_size != total_size:
-                    raise OSError("resumed download ended before the expected file size")
-            temporary.replace(path)
-            marker.unlink(missing_ok=True)
-            return path
-        except urllib.error.HTTPError as exc:
-            if exc.code == 416 and offset:
-                # A timeout can occur after the final byte but before EOF.
-                # The server then rejects the next start=filesize request.
-                match = re.fullmatch(r"bytes \*/(\d+)",
-                                     exc.headers.get("Content-Range", ""))
-                if match is not None and int(match.group(1)) == offset:
-                    temporary.replace(path)
-                    marker.unlink(missing_ok=True)
-                    return path
-                temporary.unlink(missing_ok=True)
-            if attempt == attempts - 1:
-                raise
-            print(f"  download {path.name} failed ({exc!r}); "
-                  f"retry {attempt + 1}/{attempts - 1}")
-        except (OSError, http.client.IncompleteRead) as exc:
-            if attempt == attempts - 1:
-                raise
-            print(f"  download {path.name} failed ({exc!r}); "
-                  f"retry {attempt + 1}/{attempts - 1}")
-        time.sleep(min(2 ** (attempt + 1), 30))
-    raise RuntimeError("unreachable download retry state")
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response, \
+                temporary.open("wb") as output:
+            shutil.copyfileobj(response, output)
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return path
 
 
 _BITPIX_DTYPE = {8: "u1", 16: ">i2", 32: ">i4", 64: ">i8", -32: ">f4", -64: ">f8"}

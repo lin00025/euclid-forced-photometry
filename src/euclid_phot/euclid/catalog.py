@@ -37,7 +37,7 @@ SELECT
     m.flux_detection_total,
     m.semimajor_axis, m.ellipticity, m.position_angle,
     m.point_like_prob, m.det_quality_flag,
-    m.gal_ebv, m.gal_ebv_err, m.tileid
+    m.gal_ebv, m.gal_ebv_err
 """
 _MORPHOLOGY_COLUMNS = {
     "sersic_sersic_vis_radius": "arcsec",
