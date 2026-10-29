@@ -140,7 +140,7 @@ def test_pipeline_uses_shared_archive_hooks(tmp_path, monkeypatch):
     scope = dict(DATA_DIR=tmp_path, TARGET_RA=269.48, TARGET_DEC=67.3,
                  CUTOUT_SIZE_ARCSEC=2.5, Table=Table, ep=ep)
     exec(compile(code, "notebook01_mer_cache", "exec"), scope)
-    assert scope["mer_path"].parent == tmp_path
+    assert scope["mer_path"].parent == tmp_path / "catalogs"
     np.testing.assert_array_equal(scope["mer_cat"]["object_id"], mer["object_id"])
 
 

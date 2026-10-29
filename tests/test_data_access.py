@@ -35,7 +35,7 @@ def test_switch_validation_and_existing_imports(monkeypatch, tmp_path):
     ep.set_data_access("DR1")
     dr1 = ep.get_data_dir()
     assert query is ep.query_mer_catalog and fetch is ep.fetch_cutout
-    assert q1 == tmp_path
+    assert q1 == tmp_path / "q1"
     assert dr1 == tmp_path / "dr1/deep_survey"
     with ThreadPoolExecutor(1) as executor:
         assert executor.submit(ep.get_data_access).result() == "DR1"
@@ -165,12 +165,14 @@ def test_notebook_selector_markdown_and_shared_calls(name):
                       or (isinstance(n, ast.Import) and any(a.name == "euclid_phot" for a in n.names))
                       or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call) and ast.unparse(n.value.func) == "ep.set_data_access")]
     selector = ast.unparse(ast.Module(body=selector_nodes, type_ignores=[]))
-    assert 'DATA_ACCESS = "DR1"' in first
+    selected = next(n.value.value for n in tree.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == "DATA_ACCESS" for t in n.targets))
+    assert selected in {"Q1", "DR1"}
     assert "ep.set_data_access(DATA_ACCESS)" in first
     markdown = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "markdown"]
     assert hashlib.sha256(json.dumps(markdown,ensure_ascii=False).encode()).hexdigest() == MARKDOWN_SHA256[name]
     for release in ("Q1", "DR1"):
-        exec(compile(selector.replace("DATA_ACCESS = 'DR1'", f"DATA_ACCESS = '{release}'"), name, "exec"), {"__name__":"__main__"})
+        exec(compile(selector.replace(f"DATA_ACCESS = {selected!r}", f"DATA_ACCESS = {release!r}"), name, "exec"), {"__name__":"__main__"})
         assert ep.get_data_access() == release
     for cell in nb["cells"]:
         if cell["cell_type"] != "code":continue
@@ -240,7 +242,7 @@ def test_irsa_clients_apply_the_longer_request_timeout(release, monkeypatch):
 
 
 def test_notebook04_output_location_is_independent_of_release(tmp_path, monkeypatch):
-    base = tmp_path / "native_data"
+    base = tmp_path / "data"
     monkeypatch.setenv("EUCLID_PHOT_DATA_DIR", str(base))
     monkeypatch.setattr(ep.config, "DEFAULT_DATA_DIR", base)
     path = Path(__file__).resolve().parents[1] / "notebooks/04_ground_based_forced_photometry.ipynb"
@@ -254,7 +256,7 @@ def test_notebook04_output_location_is_independent_of_release(tmp_path, monkeypa
         ep.set_data_access(release)
         scope = dict(ep=ep)
         exec(code, scope)
-        expected_data = base if release == "Q1" else base / "dr1/deep_survey"
+        expected_data = base / "q1" if release == "Q1" else base / "dr1/deep_survey"
         assert scope["DATA_DIR"] == expected_data
         assert scope["GROUND_DIR"] == expected_data / "ground_based"
         assert scope["OUTPUT_DIR"] == tmp_path / "output/ground_based"

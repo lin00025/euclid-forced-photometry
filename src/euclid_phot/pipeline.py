@@ -493,7 +493,7 @@ def _load_source_list(run, result, user_coords, mer_catalog):
         result.mer_cat = mer_catalog
     else:
         # Cache the MER catalog so a re-run skips the IRSA TAP query.
-        mer_cache = data_dir / (
+        mer_cache = data_dir / "catalogs" / (
             f"mer_catalog_{target_ra:.4f}_{target_dec:.4f}"
             f"_{int(round(cutout_size_arcsec))}.fits")
         if mer_cache.exists() and not force_download:
