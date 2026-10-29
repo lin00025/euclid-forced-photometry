@@ -50,7 +50,7 @@ def set_data_access(data_access):
 
 
 def get_data_dir():
-    """Resolve a separate cache root for the current release at call time."""
+    """Keep Q1 at the original cache root and isolate DR1 in its subdirectory."""
     base = Path(os.environ.get("EUCLID_PHOT_DATA_DIR",
                               DEFAULT_DATA_DIR))
     return base / get_access_settings()["cache_subdir"]

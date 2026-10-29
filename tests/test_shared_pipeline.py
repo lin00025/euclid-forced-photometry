@@ -1,5 +1,6 @@
 """One shared reader and fitting pipeline works for both releases."""
 from pathlib import Path
+import json
 
 from astropy.io import fits
 from astropy.table import Table
@@ -127,6 +128,20 @@ def test_pipeline_uses_shared_archive_hooks(tmp_path, monkeypatch):
     assert type(result).__module__ == "euclid_phot.pipeline"
     assert len(result.sources) == 1
     assert np.isfinite(result.fluxes_ujy["VIS"]).all()
+
+    # Notebook 01 must find the MER cache produced by the shared driver.
+    notebook = json.loads((Path(__file__).resolve().parents[1] /
+                           "notebooks/01_nisp_forced_photometry.ipynb").read_text())
+    code = next("".join(c["source"]) for c in notebook["cells"]
+                if c["cell_type"] == "code" and "mer_path =" in "".join(c["source"]))
+    def unexpected_query(*args, **kwargs):
+        raise AssertionError("Notebook 01 missed the pipeline's MER cache")
+    monkeypatch.setattr(ep, "query_mer_catalog", unexpected_query)
+    scope = dict(DATA_DIR=tmp_path, TARGET_RA=269.48, TARGET_DEC=67.3,
+                 CUTOUT_SIZE_ARCSEC=2.5, Table=Table, ep=ep)
+    exec(compile(code, "notebook01_mer_cache", "exec"), scope)
+    assert scope["mer_path"].parent == tmp_path
+    np.testing.assert_array_equal(scope["mer_cat"]["object_id"], mer["object_id"])
 
 
 def test_ground_prior_uses_shared_hooks_and_reuses_its_catalog(tmp_path, monkeypatch):

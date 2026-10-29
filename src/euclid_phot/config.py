@@ -8,10 +8,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Base cache directory; get_data_dir() adds the selected release subdirectory.
-# Editable checkouts use examples/data; wheel installs use a writable user cache.
+# Q1 uses this original cache root; get_data_dir() isolates DR1 below it.
+# Editable checkouts use examples/native_data; wheels use a writable user cache.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_CACHE = (_REPO_ROOT / "examples/data"
+_DEFAULT_CACHE = (_REPO_ROOT / "examples/native_data"
                   if (_REPO_ROOT / "pyproject.toml").is_file()
                   and Path(__file__).resolve().parent.parent.name == "src"
                   else Path.home() / ".cache/euclid_phot")

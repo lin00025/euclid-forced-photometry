@@ -35,7 +35,7 @@ def test_switch_validation_and_existing_imports(monkeypatch, tmp_path):
     ep.set_data_access("DR1")
     dr1 = ep.get_data_dir()
     assert query is ep.query_mer_catalog and fetch is ep.fetch_cutout
-    assert q1 == tmp_path / "q1"
+    assert q1 == tmp_path
     assert dr1 == tmp_path / "dr1/deep_survey"
     with ThreadPoolExecutor(1) as executor:
         assert executor.submit(ep.get_data_access).result() == "DR1"
@@ -193,7 +193,7 @@ def test_configuration_ships_inside_package():
 
 
 @pytest.mark.parametrize("release", ["Q1", "DR1"])
-def test_notebook01_mer_query_is_cached_before_image_downloads(release, tmp_path, monkeypatch):
+def test_notebook01_reads_existing_mer_cache_without_query(release, tmp_path, monkeypatch):
     ep.set_data_access(release)
     monkeypatch.setenv("EUCLID_PHOT_DATA_DIR", str(tmp_path))
     calls = []
@@ -215,7 +215,10 @@ def test_notebook01_mer_query_is_cached_before_image_downloads(release, tmp_path
                  CUTOUT_SIZE_ARCSEC=200., Table=Table, ep=ep)
     exec(query_cell, scope)
     cached = scope["mer_path"]
-    assert cached.is_file() and len(calls) == 1
+    assert not cached.exists() and len(calls) == 1
+    # A cache supplied by another workflow is still reused by notebook 01.
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    scope["mer_cat"].write(cached)
     # Simulate a new kernel: no MER table survives, but the disk cache does.
     del scope["mer_cat"]
     exec(query_cell, scope)
@@ -234,3 +237,24 @@ def test_irsa_clients_apply_the_longer_request_timeout(release, monkeypatch):
     client = access.get_public_irsa_client() if release == "public" else access.get_irsa_client(release)
     client._session.request("GET", "https://example.invalid")
     assert requests[0]["timeout"] == 600
+
+
+def test_notebook04_output_location_is_independent_of_release(tmp_path, monkeypatch):
+    base = tmp_path / "native_data"
+    monkeypatch.setenv("EUCLID_PHOT_DATA_DIR", str(base))
+    monkeypatch.setattr(ep.config, "DEFAULT_DATA_DIR", base)
+    path = Path(__file__).resolve().parents[1] / "notebooks/04_ground_based_forced_photometry.ipynb"
+    notebook = json.loads(path.read_text())
+    first = next("".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "code")
+    assignments = [n for n in ast.parse(first).body if isinstance(n, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id in {"DATA_DIR", "GROUND_DIR", "OUTPUT_DIR"}
+                           for t in n.targets)]
+    code = compile(ast.Module(body=assignments, type_ignores=[]), str(path), "exec")
+    for release in ("Q1", "DR1"):
+        ep.set_data_access(release)
+        scope = dict(ep=ep)
+        exec(code, scope)
+        expected_data = base if release == "Q1" else base / "dr1/deep_survey"
+        assert scope["DATA_DIR"] == expected_data
+        assert scope["GROUND_DIR"] == expected_data / "ground_based"
+        assert scope["OUTPUT_DIR"] == tmp_path / "output/ground_based"

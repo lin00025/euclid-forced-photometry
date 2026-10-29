@@ -5,7 +5,7 @@
       "catalog_table": "euclid_q1_mer_catalogue",
       "morphology_table": "euclid_q1_mer_morphology",
       "image_collection": "euclid_DpdMerBksMosaic",
-      "cache_subdir": "q1",
+      "cache_subdir": ".",
       "maxrec": 200000,
       "irsa": {
         "tap_url": "https://irsa.ipac.caltech.edu/TAP",

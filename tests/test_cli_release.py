@@ -28,7 +28,7 @@ def test_cli_selects_release_and_preserves_cache_override(release, explicit_cach
         args += ["--data-dir", str(tmp_path / "custom")]
     try:
         assert cli.main(args) == 0
-        subdir = "q1" if release == "Q1" else "dr1/deep_survey"
+        subdir = "." if release == "Q1" else "dr1/deep_survey"
         assert calls == [(release, tmp_path / subdir,
                           str(tmp_path / "custom") if explicit_cache else None)]
         assert Table.read(output).meta["DATAREL"] == release

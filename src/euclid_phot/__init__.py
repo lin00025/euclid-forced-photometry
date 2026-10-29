@@ -25,7 +25,7 @@ Band-specific (data access, PSF, corrections, catalog checks):
 The package imports Tractor and matplotlib only when first used, so
 importing euclid_phot does not require them. The notebooks download their
 inputs from IRSA/S3 on first run and cache them under
-``examples/data/``.
+``examples/native_data/`` (Q1) or its ``dr1/deep_survey/`` subdirectory (DR1).
 """
 from __future__ import annotations
 
